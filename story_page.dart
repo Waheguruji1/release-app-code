@@ -13,8 +13,9 @@ final currentStoryNodeProvider = StateProvider<String>((ref) => 'start');
 
 class StoryPage extends ConsumerStatefulWidget {
   final Map<String, StoryNode> storyMap;
+  final VoidCallback onExit;
 
-  const StoryPage({Key? key, required this.storyMap}) : super(key: key);
+  const StoryPage({Key? key, required this.storyMap, required this.onExit}) : super(key: key);
 
   @override
   _StoryPageState createState() => _StoryPageState();
@@ -25,6 +26,8 @@ class _StoryPageState extends ConsumerState<StoryPage> {
   InterstitialAd? _interstitialAd;
   int _nodeChanges = 0;
   final double _volume = 0.3;
+  int _interstitialLoadAttempts = 0;
+  static const int maxFailedLoadAttempts = 3;
 
   @override
   void initState() {
@@ -46,19 +49,58 @@ class _StoryPageState extends ConsumerState<StoryPage> {
   }
 
   Future<void> _initAdMob() async {
-    await _loadInterstitialAd();
+    await _requestConsent();
+    await _createInterstitialAd();
   }
 
-  Future<void> _loadInterstitialAd() async {
+  Future<void> _requestConsent() async {
+    ConsentRequestParameters params = ConsentRequestParameters();
+    ConsentInformation.instance.requestConsentInfoUpdate(
+      params,
+      () async {
+        if (await ConsentInformation.instance.isConsentFormAvailable()) {
+          _loadForm();
+        }
+      },
+      (FormError error) {
+        // Handle consent info request error
+      },
+    );
+  }
+
+  void _loadForm() {
+    ConsentForm.loadConsentForm(
+      (ConsentForm consentForm) async {
+        var status = await ConsentInformation.instance.getConsentStatus();
+        if (status == ConsentStatus.required) {
+          consentForm.show(
+            (FormError? formError) {
+              // Handle form show error
+            },
+          );
+        }
+      },
+      (FormError formError) {
+        // Handle form load error
+      },
+    );
+  }
+
+  Future<void> _createInterstitialAd() async {
     await InterstitialAd.load(
       adUnitId: interstitialAdUnitId,
       request: AdRequest(),
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (InterstitialAd ad) {
           _interstitialAd = ad;
+          _interstitialLoadAttempts = 0;
         },
-        onAdFailedToLoad: (_) {
-          // Silently handle ad load failure
+        onAdFailedToLoad: (LoadAdError error) {
+          _interstitialLoadAttempts++;
+          _interstitialAd = null;
+          if (_interstitialLoadAttempts <= maxFailedLoadAttempts) {
+            _createInterstitialAd();
+          }
         },
       ),
     );
@@ -69,11 +111,11 @@ class _StoryPageState extends ConsumerState<StoryPage> {
       _interstitialAd!.fullScreenContentCallback = FullScreenContentCallback(
         onAdDismissedFullScreenContent: (InterstitialAd ad) {
           ad.dispose();
-          _loadInterstitialAd();
+          _createInterstitialAd();
         },
-        onAdFailedToShowFullScreenContent: (InterstitialAd ad, _) {
+        onAdFailedToShowFullScreenContent: (InterstitialAd ad, AdError error) {
           ad.dispose();
-          _loadInterstitialAd();
+          _createInterstitialAd();
         },
       );
       _interstitialAd!.show().catchError((_) {
@@ -121,7 +163,7 @@ class _StoryPageState extends ConsumerState<StoryPage> {
 
     return WillPopScope(
       onWillPop: () async {
-        Navigator.of(context).pop();
+        widget.onExit();
         return false;
       },
       child: Scaffold(
@@ -129,7 +171,28 @@ class _StoryPageState extends ConsumerState<StoryPage> {
           title: Text('Story'),
           leading: IconButton(
             icon: Icon(Icons.arrow_back),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: widget.onExit,
+          ),
+        ),
+        drawer: Drawer(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: <Widget>[
+              DrawerHeader(
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                ),
+                child: Text('Menu'),
+              ),
+              ListTile(
+                title: Text('Main Menu'),
+                onTap: () {
+                  Navigator.pop(context); // Close the drawer
+                  widget.onExit(); // Exit to main menu
+                },
+              ),
+              // Add more drawer items as needed
+            ],
           ),
         ),
         body: SafeArea(
