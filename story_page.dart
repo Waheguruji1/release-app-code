@@ -14,12 +14,14 @@ const String interstitialAdUnitId = 'ca-app-pub-XXXXXXXXXXXXXXXX/XXXXXXXXXX';
 final currentStoryNodeProvider = StateProvider<String>((ref) => 'start');
 final vibrationEnabledProvider = StateProvider<bool>((ref) => true);
 final textAnimationCompleteProvider = StateProvider<bool>((ref) => false);
+final backgroundOpacityProvider = StateProvider<double>((ref) => 0.5);
 
 class StoryPage extends ConsumerStatefulWidget {
   final Map<String, StoryNode> storyMap;
   final VoidCallback onExit;
 
-  const StoryPage({Key? key, required this.storyMap, required this.onExit}) : super(key: key);
+  const StoryPage({Key? key, required this.storyMap, required this.onExit})
+      : super(key: key);
 
   @override
   _StoryPageState createState() => _StoryPageState();
@@ -62,7 +64,7 @@ class _StoryPageState extends ConsumerState<StoryPage> {
   Future<void> _requestConsent() async {
     ConsentRequestParameters params = ConsentRequestParameters();
     try {
-      await ConsentInformation.instance.requestConsentInfoUpdate(
+      ConsentInformation.instance.requestConsentInfoUpdate(
         params,
         () async {
           if (await ConsentInformation.instance.isConsentFormAvailable()) {
@@ -130,6 +132,8 @@ class _StoryPageState extends ConsumerState<StoryPage> {
       );
       _interstitialAd!.show().catchError((_) {});
       _interstitialAd = null;
+    } else {
+      _createInterstitialAd();
     }
   }
 
@@ -145,7 +149,8 @@ class _StoryPageState extends ConsumerState<StoryPage> {
       final int lastRatingPrompt = prefs.getInt('last_rating_prompt') ?? 0;
       final now = DateTime.now().millisecondsSinceEpoch;
 
-      if (!hasRated && now - lastRatingPrompt > 604800000) { // 7 days in milliseconds
+      if (!hasRated && now - lastRatingPrompt > 432000000) {
+        // 5 days in milliseconds
         if (await inAppReview.isAvailable()) {
           final userName = await _getUserName();
           _showCustomReviewDialog(userName);
@@ -169,7 +174,8 @@ class _StoryPageState extends ConsumerState<StoryPage> {
               children: <Widget>[
                 Text('We hope you\'re enjoying your adventure so far!'),
                 SizedBox(height: 10),
-                Text('Would you like to share your experience and rate our app?'),
+                Text(
+                    'Would you like to share your experience and rate our app?'),
               ],
             ),
           ),
@@ -182,12 +188,11 @@ class _StoryPageState extends ConsumerState<StoryPage> {
             ),
             TextButton(
               child: Text('Rate Now'),
-              onPressed: () {
+              onPressed: () async {
                 Navigator.of(context).pop();
-                inAppReview.openStoreListing(
-                  appStoreId: 'YOUR_APP_STORE_ID', // iOS App Store ID
-                  microsoftStoreId: 'YOUR_MICROSOFT_STORE_ID', // Microsoft Store ID
-                );
+                await inAppReview.requestReview();
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('has_rated', true);
               },
             ),
           ],
@@ -198,11 +203,17 @@ class _StoryPageState extends ConsumerState<StoryPage> {
 
   void _onNodeChange() {
     _nodeChanges++;
-    if (_nodeChanges % 5 == 0) {
+    if (_nodeChanges % 8 == 0) {
       _showInterstitialAd();
+    } else if (_nodeChanges % 8 == 7) {
+      // Preload the ad one node before it's needed
+      _createInterstitialAd();
+    }
+    if (_nodeChanges % 10 == 0) {
       _requestReview();
     }
     ref.read(textAnimationCompleteProvider.notifier).state = false;
+    print("Node changed, textAnimationComplete set to false"); 
   }
 
   @override
@@ -216,12 +227,16 @@ class _StoryPageState extends ConsumerState<StoryPage> {
   Widget build(BuildContext context) {
     final currentNode = ref.watch(currentStoryNodeProvider);
     final storyNode = widget.storyMap[currentNode] ?? widget.storyMap['start']!;
+    final backgroundOpacity = ref.watch(backgroundOpacityProvider);
 
-    return WillPopScope(
-      onWillPop: () async {
-        widget.onExit();
-        return false;
-      },
+    return PopScope(
+    canPop: false,
+    onPopInvoked: (didPop) {
+      if (didPop) {
+        return;
+      }
+      widget.onExit();
+    },
       child: Scaffold(
         appBar: AppBar(
           title: Text('Story'),
@@ -239,16 +254,29 @@ class _StoryPageState extends ConsumerState<StoryPage> {
           ],
         ),
         endDrawer: _buildDrawer(),
-        body: SafeArea(
-          child: SingleChildScrollView(
-            child: Column(
-              children: [
-                _buildStoryText(storyNode),
-                _buildAnimation(storyNode),
-                _buildChoices(storyNode),
-              ],
+        body: Stack(
+          children: [
+            Opacity(
+              opacity: backgroundOpacity,
+              child: Image.asset(
+                'assets/background_image.jpg',
+                fit: BoxFit.cover,
+                width: double.infinity,
+                height: double.infinity,
+              ),
             ),
-          ),
+            SafeArea(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    _buildStoryText(storyNode),
+                    _buildAnimation(storyNode),
+                    _buildChoices(storyNode),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -256,6 +284,7 @@ class _StoryPageState extends ConsumerState<StoryPage> {
 
   Widget _buildDrawer() {
     final vibrationEnabled = ref.watch(vibrationEnabledProvider);
+    final backgroundOpacity = ref.watch(backgroundOpacityProvider);
     return Drawer(
       child: SafeArea(
         child: ListView(
@@ -282,6 +311,18 @@ class _StoryPageState extends ConsumerState<StoryPage> {
                 Navigator.pop(context);
               },
             ),
+            ListTile(
+              title: Text('Background Opacity'),
+              subtitle: Slider(
+                value: backgroundOpacity,
+                min: 0.0,
+                max: 1.0,
+                divisions: 10,
+                onChanged: (double value) {
+                  ref.read(backgroundOpacityProvider.notifier).state = value;
+                },
+              ),
+            ),
           ],
         ),
       ),
@@ -295,7 +336,7 @@ class _StoryPageState extends ConsumerState<StoryPage> {
         animatedTexts: [
           TypewriterAnimatedText(
             storyNode.text,
-            textStyle: Theme.of(context).textTheme.headline6,
+            textStyle: Theme.of(context).textTheme.bodyLarge,
             textAlign: TextAlign.center,
             speed: Duration(milliseconds: 50),
           ),
@@ -304,6 +345,7 @@ class _StoryPageState extends ConsumerState<StoryPage> {
         onFinished: () {
           ref.read(textAnimationCompleteProvider.notifier).state = true;
         },
+        
       ),
     );
   }
@@ -314,12 +356,12 @@ class _StoryPageState extends ConsumerState<StoryPage> {
       child: RiveAnimation.asset(
         'assets/${storyNode.animation}',
         fit: BoxFit.contain,
-        onError: (_) {},
+       
       ),
     );
   }
 
-  Widget _buildChoices(StoryNode storyNode) {
+ Widget _buildChoices(StoryNode storyNode) {
     final textAnimationComplete = ref.watch(textAnimationCompleteProvider);
     
     return textAnimationComplete
@@ -330,13 +372,13 @@ class _StoryPageState extends ConsumerState<StoryPage> {
               padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
               child: SizedBox(
                 width: double.infinity,
-                child: AnimatedButton(
-                  text: choice.text,
+                child: ElevatedButton(
+                  child: Text(choice.text),
                   onPressed: () {
                     ref.read(currentStoryNodeProvider.notifier).state = choice.nextNode;
                     _onNodeChange();
                   },
-                  vibrationStrength: _vibrationStrength,
+                  
                 ),
               ),
             )
@@ -345,7 +387,6 @@ class _StoryPageState extends ConsumerState<StoryPage> {
       : SizedBox.shrink();
   }
 }
-
 class AnimatedButton extends ConsumerStatefulWidget {
   final String text;
   final VoidCallback onPressed;
@@ -397,7 +438,8 @@ class _AnimatedButtonState extends ConsumerState<AnimatedButton> {
       if (vibrationEnabled) {
         try {
           if (await Vibration.hasVibrator() ?? false) {
-            Vibration.vibrate(duration: 200, amplitude: widget.vibrationStrength);
+            Vibration.vibrate(
+                duration: 200, amplitude: widget.vibrationStrength);
           }
         } catch (_) {
           // Silently handle vibration errors
@@ -412,10 +454,21 @@ class _AnimatedButtonState extends ConsumerState<AnimatedButton> {
       onTap: _startAnimation,
       child: Container(
         height: 50,
-        child: RiveAnimation.asset(
-          'assets/button_animation.riv',
-          controllers: [_controller],
-          fit: BoxFit.cover,
+        child: Stack(
+          children: [
+            RiveAnimation.asset(
+              'assets/button_animation.riv',
+              controllers: [_controller],
+              fit: BoxFit.cover,
+            ),
+            Center(
+              child: Text(
+                widget.text,
+                style:
+                    TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
         ),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
