@@ -1,3 +1,9 @@
+// main_page.dart
+
+import 'package:flutter/material.dart';
+import 'package:myapp/story_page.dart';
+import 'story.dart';
+
 class MainPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -8,15 +14,15 @@ class MainPage extends StatelessWidget {
       body: GridView.count(
         crossAxisCount: 2,
         padding: EdgeInsets.all(16),
-        children: List.generate(8, (index) {
+        children: storyMaps.keys.map((storyTitle) {
           return ElevatedButton(
-            child: Text('Story ${index + 1}'),
+            child: Text(storyTitle),
             onPressed: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => StoryPage(
-                    storyMap: storyMaps[index],
+                    storyMap: storyMaps[storyTitle]!,
                     onExit: () {
                       Navigator.pop(context);
                     },
@@ -25,7 +31,7 @@ class MainPage extends StatelessWidget {
               );
             },
           );
-        }),
+        }).toList(),
       ),
     );
   }
